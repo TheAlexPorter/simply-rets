@@ -2,8 +2,10 @@ import React, { Component } from 'react';
 import axios from 'axios';
 import styled, { css } from 'styled-components';
 import { format } from 'date-fns';
+import ReactTooltip from 'react-tooltip';
+import find from 'lodash/find';
+import fire from './firebase';
 import { numberWithCommas } from './utils/currency';
-import homeIcon from './images/home.svg';
 import bathIcon from './images/shower.svg';
 import halfBathIcon from './images/sink.svg';
 import bedIcon from './images/bed.svg';
@@ -52,6 +54,29 @@ const Property = styled.div`
     max-width: unset;
     margin-bottom: 20px;
   }
+
+  &:hover {
+    &::before {
+      opacity: 1;
+    }
+  }
+
+  &::before {
+    content: '';
+    background-color: rgba(0, 0, 0, 40%);
+    position: absolute;
+    opacity: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transition: all 0.15s ease-in-out;
+    z-index: 0;
+  }
+
+  & > * {
+    z-index: 1;
+  }
 `;
 
 const HomeIcon = styled.div`
@@ -61,6 +86,7 @@ const HomeIcon = styled.div`
   width: 30px;
   cursor: pointer;
   transition: all 0.15s ease-in-out;
+  z-index: 5;
 
   &:hover svg {
     transform: translateY(-5px);
@@ -68,8 +94,8 @@ const HomeIcon = styled.div`
 
   svg {
     position: relative;
-    fill: #ff4e4e;
-    stroke: #ff1e1e;
+    fill: ${props => (props.saved ? '#ff4e4e' : 'white')};
+    stroke: ${props => (props.saved ? '#ff1e1e' : 'white')};
     stroke-width: 5px;
     transition: all 0.15s ease-in-out;
   }
@@ -108,11 +134,13 @@ const DetailItem = styled.div`
   }
 
   span {
+    display: block;
     color: white;
     font-size: 16px;
     font-weight: bold;
     margin: 0;
     margin-right: 5px;
+    cursor: pointer;
   }
 `;
 
@@ -120,6 +148,7 @@ const TopDetails = styled.div`
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  padding: 5px;
 `;
 
 const FlexRow = styled.div`
@@ -152,14 +181,34 @@ class App extends Component {
   constructor() {
     super();
     this.state = {
-      properties: []
+      userID: '',
+      properties: [],
+      savedProperties: []
     };
     this.getProperties = this.getProperties.bind(this);
+    this.getSavedProperties = this.getSavedProperties.bind(this);
   }
 
   componentDidMount() {
+    this.getUserId();
+    this.getSavedProperties();
     this.getProperties();
   }
+
+  getUserId = () => {
+    const userID = localStorage.getItem('userID');
+    if (!userID) {
+      console.log('No userID found', userID);
+      this.generateUserId();
+      return;
+    }
+    this.setState({ userID }, console.log('userID is ', userID));
+  };
+
+  generateUserId = () => {
+    const newUserID = Math.floor(Math.random() * 10904071935);
+    localStorage.setItem('userID', newUserID);
+  };
 
   async getProperties() {
     const response = await axios.get(
@@ -171,9 +220,76 @@ class App extends Component {
         }
       }
     );
+
     this.setState({ properties: response.data });
-    // console.log(response.data);
   }
+
+  async getSavedProperties() {
+    const db = fire.database().ref(`/${this.state.userID}`);
+    await db.once('value').then(snapshot => {
+      const data = snapshot.val();
+      let savedProperties = [];
+      console.log('firebase saved data', data);
+
+      if (data && data[this.state.userID]) {
+        savedProperties = Object.keys(data[this.state.userID]).map(val => {
+          return { mlsId: data[this.state.userID][val], firebase: val };
+        });
+      }
+
+      if (data && !data[this.state.userID]) {
+        savedProperties = Object.keys(data).map(val => {
+          return {
+            mlsId: data[val],
+            firebase: val
+          };
+        });
+      }
+      this.setState({ savedProperties });
+      return savedProperties;
+    });
+  }
+
+  deleteSavedProperty = mlsId => {
+    const deleted = find(this.state.savedProperties, { mlsId });
+    fire
+      .database()
+      .ref(this.state.userID)
+      .child('' + deleted.firebase)
+      .remove();
+  };
+
+  getSavedStatus = (mlsId, id) => {
+    const { savedProperties } = this.state;
+    const found = find(savedProperties, { mlsId });
+
+    return savedProperties.includes(found);
+  };
+  // getSavedStatus = mlsId => savedProperties.includes(mlsId);
+
+  saveProperty = id => {
+    const { userID, properties, savedProperties } = this.state;
+    const mlsId = properties[id].mlsId;
+    const existingProperty = find(savedProperties, { mlsId });
+
+    if (savedProperties.includes(existingProperty)) {
+      const newProperties = savedProperties.filter(
+        property => property.mlsId !== mlsId
+      );
+      console.log('newProperties', newProperties);
+      this.setState({ savedProperties: newProperties });
+      this.deleteSavedProperty(mlsId);
+      return;
+    }
+
+    fire
+      .database()
+      .ref(userID)
+      .push(mlsId)
+      .catch(err => {
+        console.log('firebase error', err);
+      });
+  };
 
   render() {
     const { properties } = this.state;
@@ -182,14 +298,17 @@ class App extends Component {
         <StyledApp>
           <StyledTitle>Great Houses</StyledTitle>
           <FlexWrapper>
-            {properties.map(property => (
-              <Property background={property.photos[0]}>
-                <HomeIcon>
+            {properties.map((property, id) => (
+              <Property background={property.photos[0]} key={property.mlsId}>
+                <HomeIcon
+                  saved={this.getSavedStatus(property.mlsId, id)}
+                  onClick={() => this.saveProperty(id)}
+                >
                   <svg
                     version='1.1'
                     xmlns='http://www.w3.org/2000/svg'
                     viewBox='0 0 258.024 258.024'
-                    enable-background='new 0 0 258.024 258.024'
+                    enableBackground='new 0 0 258.024 258.024'
                   >
                     <g>
                       <path d='m18.658,83.255l89.496-67.487 89.496,67.487c1.262,0.952 2.741,1.412 4.209,1.412 2.122,0 4.218-0.961 5.594-2.786 2.328-3.087 1.712-7.476-1.375-9.804l-93.71-70.666c-2.494-1.882-5.935-1.882-8.429,0l-93.709,70.666c-3.087,2.328-3.702,6.717-1.375,9.804 2.327,3.086 6.716,3.701 9.803,1.374z' />
@@ -199,7 +318,6 @@ class App extends Component {
                 </HomeIcon>
                 <TopDetails>
                   <MediumText>MLS #{property.mlsId}</MediumText>
-
                   <DetailText>
                     {format(property.listDate, 'MM/DD/YYYY')}
                   </DetailText>
@@ -211,25 +329,37 @@ class App extends Component {
                     </LargeText>
                   </FlexRow>
                   <FlexRow>
-                    <DetailItem>
+                    <DetailItem
+                      data-tip={`${property.property.bathsFull} baths`}
+                    >
+                      <ReactTooltip place='top' type='light' effect='solid' />
                       <span>{property.property.bathsFull}</span>
                       <DetailIcon>
                         <img src={bathIcon} alt='Bath' />
                       </DetailIcon>
                     </DetailItem>
 
-                    <DetailItem>
+                    <DetailItem
+                      data-tip={`${property.property.bathsHalf} half baths`}
+                    >
+                      <ReactTooltip place='top' type='light' effect='solid' />
                       <span>{property.property.bathsHalf}</span>
                       <DetailIcon>
                         <img src={halfBathIcon} alt='1/2 Bath' />
                       </DetailIcon>
                     </DetailItem>
 
-                    <DetailItem>
+                    <DetailItem
+                      data-tip={`${property.property.stories} floors`}
+                    >
+                      <ReactTooltip place='top' type='light' effect='solid' />
                       <span>{property.property.stories} flrs</span>
                     </DetailItem>
 
-                    <DetailItem>
+                    <DetailItem
+                      data-tip={`${property.property.bedrooms} bedrooms`}
+                    >
+                      <ReactTooltip place='top' type='light' effect='solid' />
                       <span>{property.property.bedrooms}</span>
                       <DetailIcon>
                         <img src={bedIcon} alt='Bedrooms' />
